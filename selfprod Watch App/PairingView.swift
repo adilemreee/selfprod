@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct PairingView: View {
     @ObservedObject var cloudManager = CloudKitManager.shared
@@ -14,6 +15,8 @@ struct PairingView: View {
         startRadius: 10,
         endRadius: 180
     )
+    
+    let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     
     var body: some View {
         ZStack {
@@ -95,6 +98,34 @@ struct PairingView: View {
                                 .stroke(LinearGradient(colors: [.white.opacity(0.2), .clear], startPoint: .top, endPoint: .bottom), lineWidth: 1)
                         )
                         
+                        // Waiting indicator
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .tint(.white)
+                            Text("Partner bekleniyor...")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        .padding(.top, 5)
+                        
+                        Button(action: {
+                            cloudManager.refreshPairingStatus()
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Durumu Kontrol Et")
+                            }
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.8))
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 16)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(20)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.top, 5)
+                        
                     } else if !isEnteringCode {
                         // Main Action Buttons
                         VStack(spacing: 15) {
@@ -166,6 +197,11 @@ struct PairingView: View {
                     }
                 }
                 .padding()
+            }
+        }
+        .onReceive(timer) { _ in
+            if generatedCode != nil && !cloudManager.isPaired {
+                cloudManager.refreshPairingStatus()
             }
         }
     }

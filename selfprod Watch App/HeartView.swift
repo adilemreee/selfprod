@@ -327,6 +327,74 @@ struct MessageCapsule: View {
     }
 }
 
+struct StatusRow: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let date: Date?
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundColor(color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(relativeString(from: date))
+                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Spacer()
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+    
+    private func relativeString(from date: Date?) -> String {
+        guard let date else { return "Henüz yok" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct PresenceRow: View {
+    let lastReceived: Date?
+    private let onlineWindow: TimeInterval = 5 * 60
+    
+    var body: some View {
+        let isOnline = {
+            guard let last = lastReceived else { return false }
+            return Date().timeIntervalSince(last) <= onlineWindow
+        }()
+        
+        return HStack(spacing: 10) {
+            Image(systemName: isOnline ? "dot.radiowaves.left.and.right" : "zzz")
+                .foregroundColor(isOnline ? .green : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Eş Durumu")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(statusText(isOnline: isOnline, last: lastReceived))
+                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Spacer()
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+    
+    private func statusText(isOnline: Bool, last: Date?) -> String {
+        if isOnline { return "Çevrimiçi görünüyor" }
+        guard let last else { return "Henüz kalp alınmadı" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return "Son kalp \(formatter.localizedString(for: last, relativeTo: Date()))"
+    }
+}
+
 struct HeartView: View {
     @ObservedObject var cloudManager = CloudKitManager.shared
     
@@ -343,6 +411,19 @@ struct HeartView: View {
     )
     
     var body: some View {
+        TabView {
+            mainHeartPage
+            statusPage
+            healthPage
+        }
+        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+        .background(bgGradient.ignoresSafeArea())
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("HeartbeatReceived"))) { _ in
+            receiveLove()
+        }
+    }
+    
+    private var mainHeartPage: some View {
         ZStack {
             bgGradient.ignoresSafeArea()
             
@@ -411,21 +492,108 @@ struct HeartView: View {
                                 .foregroundColor(.orange)
                         }
                         Button("Aboneliği Yenile") {
-                            cloudManager.refreshSubscriptions()
+                            CloudKitManager.shared.refreshSubscriptions()
                         }
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                     }
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("HeartbeatReceived"))) { _ in
-            receiveLove()
+    }
+    
+    private var statusPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Spacer(minLength: 8)
+                Text("Durum")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(LinearGradient(colors: [.cyan, .blue], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                
+                StatusRow(title: "Son Gönderilen", icon: "paperplane.fill", color: .pink, date: cloudManager.lastSentAt)
+                StatusRow(title: "Son Alınan", icon: "heart.circle.fill", color: .yellow, date: cloudManager.lastReceivedAt)
+                PresenceRow(lastReceived: cloudManager.lastReceivedAt)
+                
+                Button(action: {
+                    cloudManager.unpair()
+                }) {
+                    Text("Eşleşmeyi Bitir")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            LinearGradient(colors: [.red, .pink], startPoint: .leading, endPoint: .trailing)
+                        )
+                        .cornerRadius(14)
+                        .shadow(color: .red.opacity(0.4), radius: 5)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer(minLength: 0)
+            }
+            .padding()
         }
+        .background(bgGradient.ignoresSafeArea())
+    }
+    
+    private var healthPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Spacer(minLength: 8)
+                Text("Self Test")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(LinearGradient(colors: [.green, .mint], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                
+                Button(action: {
+                    CloudKitManager.shared.runSelfTest()
+                }) {
+                    Text("Testi Çalıştır")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing))
+                        .cornerRadius(14)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                if cloudManager.healthChecks.isEmpty {
+                    Text("Henüz test çalıştırılmadı.")
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundColor(.white.opacity(0.7))
+                } else {
+                    ForEach(cloudManager.healthChecks) { item in
+                        HStack {
+                            Image(systemName: item.isOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .foregroundColor(item.isOK ? .green : .yellow)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                Text(item.detail)
+                                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.7))
+                            }
+                            Spacer()
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(12)
+                    }
+                }
+                
+                Spacer(minLength: 0)
+            }
+            .padding()
+        }
+        .background(bgGradient.ignoresSafeArea())
     }
     
     func sendLove() {
         // 1. Haptic & Logic
-        playHeartbeatHaptic() // Custom Lub-Dup
+        playAttentionHaptic() // Single strong haptic + sound
         cloudManager.sendHeartbeat()
         
         // 2. Animation State
@@ -446,12 +614,8 @@ struct HeartView: View {
         withAnimation {
             receivedHeartbeat = true
         }
-        
-        // Intensified Haptics for receiving
-        playHeartbeatHaptic()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            playHeartbeatHaptic()
-        }
+        CloudKitManager.shared.markHeartbeatReceived()
+        playAttentionHaptic() // Single strong haptic + sound
         
         // 4 saniye sonra gelen kalp efektini kapat
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
@@ -462,14 +626,9 @@ struct HeartView: View {
     }
     
     // MARK: - Haptic Engine
-    private func playHeartbeatHaptic() {
-        // "Lub" - Deeper, longer
-        WKInterfaceDevice.current().play(.start)
-        
-        // "Dup" - Sharper, quick follow-up
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            WKInterfaceDevice.current().play(.stop)
-        }
+    private func playAttentionHaptic() {
+        // Single strong tap; .retry hissedilir ve tok
+        WKInterfaceDevice.current().play(.success)
     }
 }
 

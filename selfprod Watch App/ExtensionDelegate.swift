@@ -1,8 +1,9 @@
 import WatchKit
 import UserNotifications
 import CloudKit
+import ClockKit
 
-class ExtensionDelegate: NSObject, WKExtensionDelegate {
+class ExtensionDelegate: NSObject, WKExtensionDelegate, UNUserNotificationCenterDelegate {
     
     func applicationDidFinishLaunching() {
         print("App Launched")
@@ -15,6 +16,8 @@ class ExtensionDelegate: NSObject, WKExtensionDelegate {
     
     func registerForPushNotifications() {
         let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        setupNotificationCategories(center: center)
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if granted {
                 print("Permission granted")
@@ -24,17 +27,20 @@ class ExtensionDelegate: NSObject, WKExtensionDelegate {
             } else {
                 print("Permission denied: \(error?.localizedDescription ?? "")")
                 CloudKitManager.shared.pushRegistrationFailed("Bildirim izni verilmedi. Ayarlar > Bildirimler'den açın.")
+                CloudKitManager.shared.pushRegistered = false
             }
         }
     }
     
     func didRegisterForRemoteNotifications(withDeviceToken deviceToken: Data) {
         print("Registered for remote notifications")
+        CloudKitManager.shared.pushRegistered = true
     }
     
     func didFailToRegisterForRemoteNotificationsWithError(_ error: Error) {
         print("Failed to register: \(error.localizedDescription)")
         CloudKitManager.shared.pushRegistrationFailed("Push kaydı yapılamadı: \(error.localizedDescription)")
+        CloudKitManager.shared.pushRegistered = false
     }
     
     func didReceiveRemoteNotification(_ userInfo: [AnyHashable : Any], fetchCompletionHandler completionHandler: @escaping (WKBackgroundFetchResult) -> Void) {
@@ -57,6 +63,7 @@ class ExtensionDelegate: NSObject, WKExtensionDelegate {
                 if category == "Heartbeat" {
                     // It's a Heartbeat
                     WKInterfaceDevice.current().play(.notification)
+                    CloudKitManager.shared.markHeartbeatReceived()
                     
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: Notification.Name("HeartbeatReceived"), object: nil)
@@ -75,5 +82,28 @@ class ExtensionDelegate: NSObject, WKExtensionDelegate {
         }
         
         completionHandler(.noData)
+    }
+    
+    // MARK: - Notification actions
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if response.actionIdentifier == "HEART_REPLY" {
+            CloudKitManager.shared.sendHeartbeat()
+            WKInterfaceDevice.current().play(.success)
+        }
+    }
+    
+    private func setupNotificationCategories(center: UNUserNotificationCenter) {
+        let reply = UNNotificationAction(identifier: "HEART_REPLY", title: "Hemen karşılık ver", options: [.authenticationRequired])
+        let category = UNNotificationCategory(identifier: "Heartbeat", actions: [reply], intentIdentifiers: [], options: [])
+        center.setNotificationCategories([category])
+    }
+    
+    // MARK: - Complication quick action
+    func handle(_ userActivity: NSUserActivity) {
+        // CLKLaunchedFromComplication is just a String; use literal to avoid missing symbol issues
+        if userActivity.activityType == "com.apple.clockkit.launchfromcomplication" {
+            CloudKitManager.shared.sendHeartbeat()
+            WKInterfaceDevice.current().play(.success)
+        }
     }
 }

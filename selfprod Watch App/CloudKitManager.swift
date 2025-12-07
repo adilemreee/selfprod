@@ -9,12 +9,16 @@ class CloudKitManager: ObservableObject {
     private let pairingTTL: TimeInterval = 10 * 60 // 10 minutes
     private let heartbeatQueueKey = "PendingHeartbeats"
     private var lastPairingRecordID: CKRecord.ID?
+    private let lastSentKey = "LastHeartbeatSentAt"
+    private let lastReceivedKey = "LastHeartbeatReceivedAt"
     
     @Published var currentUserID: String?
     @Published var partnerID: String? {
         didSet {
             if let id = partnerID {
                 UserDefaults.standard.set(id, forKey: "partnerID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "partnerID")
             }
         }
     }
@@ -24,11 +28,23 @@ class CloudKitManager: ObservableObject {
     @Published var pendingHeartbeats: [HeartbeatDraft] = [] {
         didSet { persistPendingHeartbeats() }
     }
+    @Published var lastSentAt: Date? {
+        didSet { persistDate(lastSentAt, key: lastSentKey) }
+    }
+    @Published var lastReceivedAt: Date? {
+        didSet { persistDate(lastReceivedAt, key: lastReceivedKey) }
+    }
+    @Published var pushRegistered: Bool = false
+    @Published var heartbeatSubscribed: Bool = false
+    @Published var pairingSubscribed: Bool = false
+    @Published var healthChecks: [HealthCheck] = []
     
     private init() {
         self.partnerID = UserDefaults.standard.string(forKey: "partnerID")
         self.isPaired = self.partnerID != nil
         self.pendingHeartbeats = Self.loadPendingHeartbeats(from: heartbeatQueueKey)
+        self.lastSentAt = UserDefaults.standard.object(forKey: lastSentKey) as? Date
+        self.lastReceivedAt = UserDefaults.standard.object(forKey: lastReceivedKey) as? Date
         
         checkAccountStatus()
     }
@@ -44,10 +60,25 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+    private func persistDate(_ date: Date?, key: String) {
+        if let date = date {
+            UserDefaults.standard.set(date, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+    
     struct HeartbeatDraft: Codable, Identifiable {
         let id: UUID
         let toID: String
         let timestamp: Date
+    }
+    
+    struct HealthCheck: Identifiable {
+        let id = UUID()
+        let title: String
+        let isOK: Bool
+        let detail: String
     }
     
     func checkAccountStatus() {
@@ -265,13 +296,24 @@ class CloudKitManager: ObservableObject {
         subscription.notificationInfo = info
         
         database.save(subscription) { _, error in
-            if let error = error {
-                print("Subscription failed: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self.errorMessage = "Eşleşme bildirimi abonesi kurulamadı. Tekrar deneyin."
+            if let error = error as? CKError {
+                if self.shouldTreatSubscriptionAsSuccess(error) {
+                    DispatchQueue.main.async {
+                        self.pairingSubscribed = true
+                        self.errorMessage = nil
+                    }
+                } else {
+                    print("Subscription failed: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.errorMessage = "Eşleşme bildirimi abonesi kurulamadı. Tekrar deneyin."
+                        self.pairingSubscribed = false
+                    }
                 }
             } else {
                 print("Listening for pairing completion...")
+                DispatchQueue.main.async {
+                    self.pairingSubscribed = true
+                }
             }
         }
     }
@@ -344,10 +386,35 @@ class CloudKitManager: ObservableObject {
                 self.flushPendingHeartbeats()
                 DispatchQueue.main.async {
                     self.errorMessage = nil
+                    self.lastSentAt = timestamp
                 }
             }
         }
     }
+    
+    // MARK: - Self test
+    func runSelfTest() {
+        var results: [HealthCheck] = []
+        
+        let iCloudOK = permissionStatus == .available
+        results.append(HealthCheck(title: "iCloud Durumu", isOK: iCloudOK, detail: iCloudOK ? "Uygun" : "Kısıtlı veya hesap yok"))
+        
+        let pushOK = pushRegistered
+        results.append(HealthCheck(title: "Push Kaydı", isOK: pushOK, detail: pushOK ? "Kayıtlı" : "Kayıt yok"))
+        
+        results.append(HealthCheck(title: "Kalp Aboneliği", isOK: heartbeatSubscribed, detail: heartbeatSubscribed ? "Aktif" : "Yenilemeniz gerekebilir"))
+        results.append(HealthCheck(title: "Eşleşme Aboneliği", isOK: pairingSubscribed || lastPairingRecordID == nil, detail: pairingSubscribed ? "Aktif" : "Gerekirse yeniden kurun"))
+        
+        let hasPartner = partnerID != nil
+        results.append(HealthCheck(title: "Eşleşme", isOK: hasPartner, detail: hasPartner ? "Partner bağlı" : "Partner yok"))
+        
+        results.append(HealthCheck(title: "Bekleyen Kalpler", isOK: pendingHeartbeats.isEmpty, detail: pendingHeartbeats.isEmpty ? "Kuyruk boş" : "\(pendingHeartbeats.count) bekliyor"))
+        
+        DispatchQueue.main.async {
+            self.healthChecks = results
+        }
+    }
+
     
     func subscribeToHeartbeats() {
         guard let myID = currentUserID else { return }
@@ -365,16 +432,23 @@ class CloudKitManager: ObservableObject {
         subscription.notificationInfo = info
         
         database.save(subscription) { _, error in
-            if let error = error {
-                // Subscription might already exist, which is fine
+            if let error = error as? CKError {
                 print("Heartbeat subscription result: \(error.localizedDescription)")
                 DispatchQueue.main.async {
-                    self.errorMessage = "Kalp bildirimi abonesi kurulamadı. Yeniden deneyin."
+                    if self.shouldTreatSubscriptionAsSuccess(error) {
+                        self.errorMessage = nil
+                        self.heartbeatSubscribed = true
+                    } else {
+                        // Show detailed error for debugging
+                        self.errorMessage = "Bildirim hatası: \(error.localizedDescription)"
+                        self.heartbeatSubscribed = false
+                    }
                 }
             } else {
                 print("Subscribed to heartbeats.")
                 DispatchQueue.main.async {
                     self.errorMessage = nil
+                    self.heartbeatSubscribed = true
                 }
             }
         }
@@ -384,6 +458,19 @@ class CloudKitManager: ObservableObject {
         subscribeToHeartbeats()
         if let recordID = lastPairingRecordID {
             subscribeToPairingUpdate(recordID: recordID)
+        }
+    }
+    
+    func refreshPairingStatus() {
+        if let recordID = lastPairingRecordID {
+            checkPairingStatus(recordID: recordID)
+        } else {
+            // Check if we have a locally stored partnerID but maybe session is lost
+            // For now, mostly used when waiting for code
+            if let pID = partnerID {
+                 // Already paired locally
+                isPaired = true
+            }
         }
     }
     
@@ -421,6 +508,7 @@ class CloudKitManager: ObservableObject {
                         if self.pendingHeartbeats.isEmpty {
                             self.errorMessage = nil
                         }
+                        self.lastSentAt = draft.timestamp
                     }
                 }
             }
@@ -437,11 +525,21 @@ class CloudKitManager: ObservableObject {
         }
     }
     
+    private func shouldTreatSubscriptionAsSuccess(_ error: CKError) -> Bool {
+        // When a subscription with the same ID already exists CloudKit can return a variety of codes.
+        let description = error.localizedDescription.lowercased()
+        if error.code == .serverRejectedRequest {
+            return description.contains("exists") || description.contains("already") || description.contains("duplicate")
+        }
+        return description.contains("already exists") || description.contains("duplicate subscription")
+    }
+    
     // MARK: - Push registration feedback
     
     func pushRegistrationFailed(_ message: String) {
         DispatchQueue.main.async {
             self.errorMessage = message
+            self.pushRegistered = false
         }
     }
     
@@ -453,5 +551,30 @@ class CloudKitManager: ObservableObject {
             return
         }
         getCurrentUserID()
+    }
+    
+    func unpair() {
+        let cleanup = {
+            DispatchQueue.main.async {
+                self.partnerID = nil
+                self.isPaired = false
+                self.lastPairingRecordID = nil
+                self.pendingHeartbeats.removeAll()
+                self.lastSentAt = nil
+                self.lastReceivedAt = nil
+                self.errorMessage = nil
+            }
+        }
+        
+        // Clean up any sessions we initiated; ignore errors because partner may own the record.
+        invalidatePreviousSessions {
+            cleanup()
+        }
+    }
+    
+    func markHeartbeatReceived(at date: Date = Date()) {
+        DispatchQueue.main.async {
+            self.lastReceivedAt = date
+        }
     }
 }

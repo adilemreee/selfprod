@@ -74,7 +74,7 @@ struct PulsingHeartView: View {
     
     let baseFontSize: CGFloat = 80
     
-    // Otomatik atış ritmi
+    // Otomatik atış ritmi - autoconnect ile her zaman çalışır
     let heartbeatTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
     
     var body: some View {
@@ -363,13 +363,19 @@ struct PresenceRow: View {
     let lastReceived: Date?
     private let onlineWindow: TimeInterval = 5 * 60
     
+    // Timer to refresh every 30 seconds for real-time updates
+    let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    @State private var refreshTrigger = false
+    
+    private var isOnline: Bool {
+        // refreshTrigger dependency forces recalculation on timer tick
+        let _ = refreshTrigger
+        guard let last = lastReceived else { return false }
+        return Date().timeIntervalSince(last) <= onlineWindow
+    }
+    
     var body: some View {
-        let isOnline = {
-            guard let last = lastReceived else { return false }
-            return Date().timeIntervalSince(last) <= onlineWindow
-        }()
-        
-        return HStack(spacing: 10) {
+        HStack(spacing: 10) {
             Image(systemName: isOnline ? "dot.radiowaves.left.and.right" : "zzz")
                 .foregroundColor(isOnline ? .green : .orange)
             VStack(alignment: .leading, spacing: 2) {
@@ -384,6 +390,9 @@ struct PresenceRow: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(12)
+        .onReceive(refreshTimer) { _ in
+            refreshTrigger.toggle()
+        }
     }
     
     private func statusText(isOnline: Bool, last: Date?) -> String {
@@ -395,11 +404,128 @@ struct PresenceRow: View {
     }
 }
 
+// MARK: - Proximity Section
+struct ProximitySection: View {
+    @ObservedObject var presenceManager = PresenceManager.shared
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Toggle Row
+            HStack(spacing: 10) {
+                Image(systemName: "location.fill")
+                    .foregroundColor(.cyan)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Yakınlık Algılama")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Text(presenceManager.isEnabled ? "Açık" : "Kapalı")
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                Spacer()
+                Toggle("", isOn: $presenceManager.isEnabled)
+                    .labelsHidden()
+                    .tint(.cyan)
+            }
+            .padding()
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(12)
+            
+            // Status Row (only if enabled)
+            if presenceManager.isEnabled {
+                HStack(spacing: 10) {
+                    Image(systemName: presenceManager.isNearPartner ? "figure.2" : "figure.walk")
+                        .foregroundColor(presenceManager.isNearPartner ? .green : .gray)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(presenceManager.isNearPartner ? "Yakınınızda! 💕" : "Partner Mesafesi")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundColor(presenceManager.isNearPartner ? .green : .white)
+                        if let distance = presenceManager.distanceToPartner {
+                            Text(distance.formattedDistance)
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundColor(.white.opacity(0.7))
+                        } else {
+                            Text("Konum bekleniyor...")
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                    }
+                    Spacer()
+                }
+                .padding()
+                .background(presenceManager.isNearPartner ? Color.green.opacity(0.15) : Color.white.opacity(0.05))
+                .cornerRadius(12)
+                .animation(.easeInOut, value: presenceManager.isNearPartner)
+                
+                // Partner location timestamp
+                if let timestamp = presenceManager.partnerLocationTimestamp {
+                    HStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 10))
+                            .foregroundColor(.cyan.opacity(0.7))
+                        Text("Partner konumu: \(relativeString(from: timestamp))")
+                            .font(.system(size: 10, weight: .regular, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .padding(.horizontal)
+                }
+                
+                // Last Encounter
+                if let lastEncounter = presenceManager.lastEncounter {
+                    HStack(spacing: 10) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundColor(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Son Buluşma")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            Text(relativeString(from: lastEncounter))
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        Spacer()
+                    }
+                    .padding()
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(12)
+                }
+            }
+            
+            // Authorization warning
+            if presenceManager.isEnabled && presenceManager.authorizationStatus != .authorizedWhenInUse && presenceManager.authorizationStatus != .authorizedAlways {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.yellow)
+                    Text("Konum izni gerekli")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundColor(.yellow)
+                    Spacer()
+                }
+                .padding()
+                .background(Color.yellow.opacity(0.1))
+                .cornerRadius(12)
+                .onTapGesture {
+                    presenceManager.requestAuthorization()
+                }
+            }
+        }
+    }
+    
+    private func relativeString(from date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 struct HeartView: View {
     @ObservedObject var cloudManager = CloudKitManager.shared
+    @ObservedObject var presenceManager = PresenceManager.shared
+    @ObservedObject var voiceManager = VoiceManager.shared
     
     @State private var showSentMessage = false
     @State private var receivedHeartbeat = false
+    @State private var isSending = false
+    @State private var lastSentTime: Date?
+    @State private var showUnpairConfirmation = false
     // Since we are in HeartView, we are theoretically paired.
     // However, cloudManager.isPaired is the source of truth.
     
@@ -413,6 +539,7 @@ struct HeartView: View {
     var body: some View {
         TabView {
             mainHeartPage
+            voicePage
             statusPage
             healthPage
         }
@@ -479,12 +606,6 @@ struct HeartView: View {
                         .padding(.horizontal, 12)
                         .padding(.bottom, 4)
                     
-                    if !cloudManager.pendingHeartbeats.isEmpty {
-                        Text("\(cloudManager.pendingHeartbeats.count) bekleyen kalp var.")
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.yellow)
-                    }
-                    
                     HStack(spacing: 8) {
                         if cloudManager.permissionStatus == .restricted || cloudManager.permissionStatus == .couldNotDetermine {
                             Text("iCloud kısıtlı, ayarları kontrol et.")
@@ -515,8 +636,24 @@ struct HeartView: View {
                 StatusRow(title: "Son Alınan", icon: "heart.circle.fill", color: .yellow, date: cloudManager.lastReceivedAt)
                 PresenceRow(lastReceived: cloudManager.lastReceivedAt)
                 
+                // Proximity Section
+                Divider()
+                    .background(Color.white.opacity(0.2))
+                    .padding(.vertical, 4)
+                
+                Text("Yakınlık")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(LinearGradient(colors: [.cyan, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                ProximitySection()
+                
+                Divider()
+                    .background(Color.white.opacity(0.2))
+                    .padding(.vertical, 4)
+                
                 Button(action: {
-                    cloudManager.unpair()
+                    showUnpairConfirmation = true
                 }) {
                     Text("Eşleşmeyi Bitir")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
@@ -530,6 +667,14 @@ struct HeartView: View {
                         .shadow(color: .red.opacity(0.4), radius: 5)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .alert("Eşleşmeyi Bitir", isPresented: $showUnpairConfirmation) {
+                    Button("İptal", role: .cancel) { }
+                    Button("Evet, Bitir", role: .destructive) {
+                        cloudManager.unpair()
+                    }
+                } message: {
+                    Text("Eşleşmeyi bitirmek istediğinden emin misin?")
+                }
                 
                 Spacer(minLength: 0)
             }
@@ -591,20 +736,166 @@ struct HeartView: View {
         .background(bgGradient.ignoresSafeArea())
     }
     
+    private var voicePage: some View {
+        VStack(spacing: 12) {
+            // Title
+            Text("Sesli Mesaj")
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .padding(.top, 8)
+            
+            Spacer()
+            
+            // Incoming Message
+            if voiceManager.hasIncomingMessage {
+                Button(action: {
+                    voiceManager.playIncomingMessage()
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: voiceManager.isPlaying ? "speaker.wave.2.fill" : "envelope.fill")
+                            .foregroundColor(.yellow)
+                            .symbolEffect(.pulse, isActive: voiceManager.hasIncomingMessage)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text("Sesli Mesaj Var!")
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.yellow)
+                                if voiceManager.incomingMessageDuration > 0 {
+                                    Text("(\(Int(voiceManager.incomingMessageDuration))sn)")
+                                        .font(.system(size: 10, weight: .regular, design: .rounded))
+                                        .foregroundColor(.yellow.opacity(0.8))
+                                }
+                            }
+                            Text(voiceManager.isPlaying ? "Çalıyor..." : "Dinlemek için dokun")
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        Spacer()
+                    }
+                    .padding()
+                    .background(Color.yellow.opacity(0.15))
+                    .cornerRadius(12)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal)
+            }
+            
+            // Record Button (Centered)
+            VStack(spacing: 8) {
+                ZStack {
+                    // Progress ring
+                    Circle()
+                        .stroke(Color.white.opacity(0.1), lineWidth: 4)
+                        .frame(width: 80, height: 80)
+                    
+                    Circle()
+                        .trim(from: 0, to: voiceManager.recordingProgress)
+                        .stroke(
+                            LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .frame(width: 80, height: 80)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.1), value: voiceManager.recordingProgress)
+                    
+                    // Mic button
+                    Button(action: {}) {
+                        Image(systemName: voiceManager.isRecording ? "stop.fill" : "mic.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(voiceManager.isRecording ? .red : .white)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.1)
+                            .onEnded { _ in
+                                voiceManager.startRecording()
+                            }
+                    )
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { _ in
+                                if voiceManager.isRecording {
+                                    voiceManager.stopRecording()
+                                }
+                            }
+                    )
+                }
+                
+                // Instruction / Sent message
+                if voiceManager.showSentMessage {
+                    Text("Ses Gönderildi! 🎤")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundColor(.green)
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    Text(voiceManager.isRecording ? "Bırak → Gönder" : "Basılı Tut → Kaydet")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+            .animation(.easeInOut, value: voiceManager.showSentMessage)
+            
+            Spacer()
+            
+            // Error message
+            if let error = voiceManager.errorMessage {
+                Text(error)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundColor(.red.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.bottom, 8)
+            }
+        }
+        .background(bgGradient.ignoresSafeArea())
+        .onAppear {
+            voiceManager.subscribeToVoiceMessages()
+            voiceManager.checkForIncomingMessages()
+        }
+    }
+    
     func sendLove() {
-        // 1. Haptic & Logic
-        playAttentionHaptic() // Single strong haptic + sound
-        cloudManager.sendHeartbeat()
+        // Debouncing: 2 saniye içinde tekrar gönderilmesini engelle
+        let now = Date()
+        if let lastSent = lastSentTime, now.timeIntervalSince(lastSent) < 2.0 {
+            print("Debounced: Too fast, ignoring tap")
+            return
+        }
         
-        // 2. Animation State
+        // Eğer zaten gönderiliyor ise tekrar gönderme
+        guard !isSending else {
+            print("Already sending, ignoring tap")
+            return
+        }
+        
+        // Gönderim başladı
+        isSending = true
+        lastSentTime = now
+        
+        // 1. Haptic & Hemen mesaj göster (anlık feedback)
+        playAttentionHaptic()
         withAnimation {
             showSentMessage = true
         }
         
-        // 2 saniye sonra gönderildi mesajını kaldır
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation {
-                showSentMessage = false
+        // 2. CloudKit'e gönder
+        cloudManager.sendHeartbeat { [self] success in
+            DispatchQueue.main.async {
+                self.isSending = false
+                
+                if success {
+                    // 2 saniye sonra gönderildi mesajını kaldır
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation {
+                            self.showSentMessage = false
+                        }
+                    }
+                } else {
+                    // Hata durumunda mesajı hemen kaldır
+                    withAnimation {
+                        self.showSentMessage = false
+                    }
+                    self.lastSentTime = nil
+                }
             }
         }
     }

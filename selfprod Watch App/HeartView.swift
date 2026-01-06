@@ -221,30 +221,15 @@ struct PulsingHeartView: View {
     }
 }
 
-// MARK: - Modern Connection Status Pill
+// MARK: - Modern Connection Status Dot (Sağ Üst Köşe)
 struct ModernStatusView: View {
     let isConnected: Bool
     
     var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(isConnected ? Color.green : Color.red)
-                .frame(width: 5, height: 5)
-                .shadow(color: isConnected ? .green : .red, radius: 2)
-            
-            Text(isConnected ? "Bağlı" : "Koptu")
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundColor(isConnected ? .white.opacity(0.8) : .red.opacity(0.8))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(
-            Capsule()
-                .fill(Color.black.opacity(0.4))
-                .overlay(
-                    Capsule().stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-                )
-        )
+        Circle()
+            .fill(isConnected ? Color.green : Color.red)
+            .frame(width: 8, height: 8)
+            .shadow(color: isConnected ? .green.opacity(0.8) : .red.opacity(0.8), radius: 4)
     }
 }
 
@@ -305,6 +290,129 @@ struct FloatingHeart: Identifiable {
     var size: CGFloat
     var color: Color
     var opacity: Double
+}
+
+// MARK: - Health Check UI Components
+struct HealthScoreView: View {
+    let check: CloudKitManager.HealthCheck
+    
+    private var scoreValue: Int {
+        // Extract score from detail like "%85 - 8/10 test geçti"
+        let components = check.detail.components(separatedBy: " ")
+        if let first = components.first, first.hasPrefix("%") {
+            return Int(first.dropFirst()) ?? 0
+        }
+        return 0
+    }
+    
+    private var scoreColor: Color {
+        if scoreValue >= 90 { return .green }
+        if scoreValue >= 70 { return .yellow }
+        return .red
+    }
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Background circle
+                Circle()
+                    .stroke(Color.white.opacity(0.1), lineWidth: 6)
+                    .frame(width: 60, height: 60)
+                
+                // Progress circle
+                Circle()
+                    .trim(from: 0, to: CGFloat(scoreValue) / 100)
+                    .stroke(
+                        LinearGradient(
+                            colors: [scoreColor, scoreColor.opacity(0.6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                    )
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(-90))
+                
+                // Score text
+                VStack(spacing: 0) {
+                    Text("\(scoreValue)")
+                        .font(.system(size: 18, weight: .heavy, design: .rounded))
+                        .foregroundColor(scoreColor)
+                    Text("%")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundColor(scoreColor.opacity(0.7))
+                }
+            }
+            
+            Text(scoreValue >= 90 ? "Mükemmel! ✨" : (scoreValue >= 70 ? "İyi Durumda" : "Kontrol Gerekli"))
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundColor(scoreColor)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(scoreColor.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(scoreColor.opacity(0.3), lineWidth: 1)
+                )
+        )
+    }
+}
+
+struct HealthCheckRow: View {
+    let item: CloudKitManager.HealthCheck
+    
+    private var iconName: String {
+        switch item.severity {
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.circle.fill"
+        case .info: return "info.circle.fill"
+        }
+    }
+    
+    private var iconColor: Color {
+        switch item.severity {
+        case .success: return .green
+        case .warning: return .yellow
+        case .error: return .red
+        case .info: return .blue
+        }
+    }
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(iconColor)
+                .frame(width: 20)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Text(item.detail)
+                    .font(.system(size: 10, weight: .regular, design: .rounded))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(2)
+            }
+            
+            Spacer()
+            
+            // Status indicator
+            Circle()
+                .fill(iconColor)
+                .frame(width: 6, height: 6)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
 }
 
 // MARK: - Message Capsule UI
@@ -558,15 +666,26 @@ struct HeartView: View {
             
             VStack {
                 // ÜST KISIM
-                VStack(spacing: 6) {
-                    Text("ÖZLEDİM AŞKIMI")
-                        .font(.system(size: 17, weight: .heavy, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(colors: [.pink, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                        .shadow(color: .pink.opacity(0.4), radius: 3, x: 0, y: 0)
+                ZStack {
+                    VStack(spacing: 6) {
+                        Text("ÖZLEDİM AŞKIMI")
+                            .font(.system(size: 17, weight: .heavy, design: .rounded))
+                            .foregroundStyle(
+                                LinearGradient(colors: [.pink, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            )
+                            .shadow(color: .pink.opacity(0.4), radius: 3, x: 0, y: 0)
+                    }
                     
-                    ModernStatusView(isConnected: cloudManager.isPaired)
+                    // Sağ üst köşede bağlantı noktası
+                    VStack {
+                        HStack {
+                            Spacer()
+                            ModernStatusView(isConnected: cloudManager.isPaired)
+                                .padding(.trailing, 8)
+                                .padding(.top, 2)
+                        }
+                        Spacer()
+                    }
                 }
                 .padding(.top, 15)
                 
@@ -687,53 +806,156 @@ struct HeartView: View {
         ScrollView {
             VStack(spacing: 12) {
                 Spacer(minLength: 8)
-                Text("Self Test")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(LinearGradient(colors: [.green, .mint], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
                 
-                Button(action: {
-                    CloudKitManager.shared.runSelfTest()
-                }) {
-                    Text("Testi Çalıştır")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                // Başlık
+                HStack {
+                    Text("Sistem Testi")
+                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .foregroundStyle(LinearGradient(colors: [.green, .mint], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    
+                    Spacer()
+                    
+                    // Son test tarihi
+                    if let lastTest = cloudManager.lastTestDate {
+                        Text(formatShortTime(lastTest))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                }
+                .padding(.horizontal)
+                
+                // Test Butonu ve Progress
+                VStack(spacing: 8) {
+                    Button(action: {
+                        CloudKitManager.shared.runSelfTest()
+                    }) {
+                        HStack(spacing: 8) {
+                            if cloudManager.isRunningTest {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "stethoscope")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            Text(cloudManager.isRunningTest ? "Test Yapılıyor..." : "Testi Çalıştır")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                        }
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity)
-                        .background(LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing))
+                        .background(
+                            LinearGradient(
+                                colors: cloudManager.isRunningTest ? [.gray, .gray.opacity(0.8)] : [.green, .mint],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .cornerRadius(14)
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                if cloudManager.healthChecks.isEmpty {
-                    Text("Henüz test çalıştırılmadı.")
-                        .font(.system(size: 11, weight: .regular, design: .rounded))
-                        .foregroundColor(.white.opacity(0.7))
-                } else {
-                    ForEach(cloudManager.healthChecks) { item in
-                        HStack {
-                            Image(systemName: item.isOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                .foregroundColor(item.isOK ? .green : .yellow)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                Text(item.detail)
-                                    .font(.system(size: 11, weight: .regular, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.7))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .disabled(cloudManager.isRunningTest)
+                    
+                    // Progress Bar
+                    if cloudManager.isRunningTest {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.1))
+                                    .frame(height: 4)
+                                
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(LinearGradient(colors: [.green, .mint], startPoint: .leading, endPoint: .trailing))
+                                    .frame(width: geo.size.width * cloudManager.testProgress, height: 4)
+                                    .animation(.easeInOut(duration: 0.2), value: cloudManager.testProgress)
                             }
-                            Spacer()
                         }
-                        .padding()
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(12)
+                        .frame(height: 4)
+                        .padding(.horizontal, 4)
                     }
                 }
                 
-                Spacer(minLength: 0)
+                // Sonuçlar
+                if cloudManager.healthChecks.isEmpty && !cloudManager.isRunningTest {
+                    VStack(spacing: 8) {
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white.opacity(0.3))
+                        Text("Henüz test çalıştırılmadı")
+                            .font(.system(size: 11, weight: .regular, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                        Text("Sistemin sağlığını kontrol etmek için\ntesti çalıştırın")
+                            .font(.system(size: 10, weight: .regular, design: .rounded))
+                            .foregroundColor(.white.opacity(0.4))
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, 20)
+                } else {
+                    // Genel Skor (en üstte)
+                    if let scoreCheck = cloudManager.healthChecks.first(where: { $0.title == "Genel Skor" }) {
+                        HealthScoreView(check: scoreCheck)
+                            .padding(.bottom, 4)
+                    }
+                    
+                    // Kategorilere göre grupla
+                    ForEach(groupedHealthChecks(), id: \.0) { category, checks in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(category)
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.6))
+                                .padding(.leading, 4)
+                            
+                            ForEach(checks) { item in
+                                HealthCheckRow(item: item)
+                            }
+                        }
+                    }
+                    
+                    // Yenile Butonu
+                    if !cloudManager.healthChecks.isEmpty {
+                        Button(action: {
+                            cloudManager.refreshSubscriptions()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text("Abonelikleri Yenile")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.cyan.opacity(0.15))
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.top, 8)
+                    }
+                }
+                
+                Spacer(minLength: 20)
             }
             .padding()
         }
         .background(bgGradient.ignoresSafeArea())
+    }
+    
+    // MARK: - Health Page Helpers
+    private func groupedHealthChecks() -> [(String, [CloudKitManager.HealthCheck])] {
+        let checks = cloudManager.healthChecks.filter { $0.title != "Genel Skor" }
+        let grouped = Dictionary(grouping: checks) { $0.category.rawValue }
+        let order = ["Hesap", "Bağlantı", "Abonelik", "Eşleşme", "Veri"]
+        return order.compactMap { key in
+            if let items = grouped[key], !items.isEmpty {
+                return (key, items)
+            }
+            return nil
+        }
+    }
+    
+    private func formatShortTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
     
     private var voicePage: some View {

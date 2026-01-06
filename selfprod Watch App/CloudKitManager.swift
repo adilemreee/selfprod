@@ -135,12 +135,42 @@ class CloudKitManager: ObservableObject, CloudKitManagerProtocol {
     @Published var isSendingHeartbeat: Bool = false
     
     // MARK: - Health Check Model
+    enum HealthCategory: String {
+        case account = "Hesap"
+        case connection = "Bağlantı"
+        case subscription = "Abonelik"
+        case pairing = "Eşleşme"
+        case data = "Veri"
+    }
+    
+    enum HealthSeverity: Int {
+        case success = 0
+        case warning = 1
+        case error = 2
+        case info = 3
+    }
+    
     struct HealthCheck: Identifiable {
-        let id = UUID()
+        let id: UUID
         let title: String
         let isOK: Bool
         let detail: String
+        let category: HealthCategory
+        let severity: HealthSeverity
+        
+        init(title: String, isOK: Bool, detail: String, category: HealthCategory = .connection, severity: HealthSeverity? = nil) {
+            self.id = UUID()
+            self.title = title
+            self.isOK = isOK
+            self.detail = detail
+            self.category = category
+            self.severity = severity ?? (isOK ? .success : .warning)
+        }
     }
+    
+    @Published var isRunningTest: Bool = false
+    @Published var testProgress: Double = 0
+    @Published var lastTestDate: Date? = nil
     
     // MARK: - Initialization
     private init() {
@@ -619,22 +649,187 @@ class CloudKitManager: ObservableObject, CloudKitManagerProtocol {
     
     // MARK: - Self Test
     func runSelfTest() {
-        var results: [HealthCheck] = []
-        
-        let iCloudOK = permissionStatus == .available
-        results.append(HealthCheck(title: "iCloud Durumu", isOK: iCloudOK, detail: iCloudOK ? "Uygun" : "Kısıtlı veya hesap yok"))
-        
-        let pushOK = pushRegistered
-        results.append(HealthCheck(title: "Push Kaydı", isOK: pushOK, detail: pushOK ? "Kayıtlı" : "Kayıt yok"))
-        
-        results.append(HealthCheck(title: "Kalp Aboneliği", isOK: heartbeatSubscribed, detail: heartbeatSubscribed ? "Aktif" : "Yenilemeniz gerekebilir"))
-        results.append(HealthCheck(title: "Eşleşme Aboneliği", isOK: pairingSubscribed || lastPairingRecordID == nil, detail: pairingSubscribed ? "Aktif" : "Gerekirse yeniden kurun"))
-        
-        let hasPartner = partnerID != nil
-        results.append(HealthCheck(title: "Eşleşme", isOK: hasPartner, detail: hasPartner ? "Partner bağlı" : "Partner yok"))
+        guard !isRunningTest else { return }
         
         DispatchQueue.main.async {
-            self.healthChecks = results
+            self.isRunningTest = true
+            self.testProgress = 0
+            self.healthChecks = []
+        }
+        
+        var results: [HealthCheck] = []
+        let totalTests = 10
+        var completedTests = 0
+        
+        func updateProgress() {
+            completedTests += 1
+            DispatchQueue.main.async {
+                self.testProgress = Double(completedTests) / Double(totalTests)
+            }
+        }
+        
+        // Test 1: iCloud Hesap Durumu
+        let iCloudOK = permissionStatus == .available
+        let iCloudDetail: String
+        let iCloudSeverity: HealthSeverity
+        switch permissionStatus {
+        case .available:
+            iCloudDetail = "iCloud hesabı aktif ve erişilebilir"
+            iCloudSeverity = .success
+        case .noAccount:
+            iCloudDetail = "iCloud hesabı bulunamadı. Ayarlar > iCloud'dan giriş yapın"
+            iCloudSeverity = .error
+        case .restricted:
+            iCloudDetail = "iCloud erişimi kısıtlanmış. Ebeveyn denetimlerini kontrol edin"
+            iCloudSeverity = .error
+        case .couldNotDetermine:
+            iCloudDetail = "iCloud durumu belirlenemedi. Ağ bağlantısını kontrol edin"
+            iCloudSeverity = .warning
+        case .temporarilyUnavailable:
+            iCloudDetail = "iCloud geçici olarak kullanılamıyor. Biraz bekleyin"
+            iCloudSeverity = .warning
+        @unknown default:
+            iCloudDetail = "Bilinmeyen iCloud durumu"
+            iCloudSeverity = .warning
+        }
+        results.append(HealthCheck(title: "iCloud Hesabı", isOK: iCloudOK, detail: iCloudDetail, category: .account, severity: iCloudSeverity))
+        updateProgress()
+        
+        // Test 2: Kullanıcı Kimliği
+        let hasUserID = currentUserID != nil
+        results.append(HealthCheck(
+            title: "Kullanıcı Kimliği",
+            isOK: hasUserID,
+            detail: hasUserID ? "Kimlik alındı: ...\(String(currentUserID?.suffix(8) ?? ""))" : "Kimlik alınamadı",
+            category: .account,
+            severity: hasUserID ? .success : .error
+        ))
+        updateProgress()
+        
+        // Test 3: Push Bildirimi Kaydı
+        let pushOK = pushRegistered
+        results.append(HealthCheck(
+            title: "Push Bildirimi",
+            isOK: pushOK,
+            detail: pushOK ? "Cihaz bildirimlere kayıtlı" : "Push kaydı yapılamadı. Bildirimleri açın",
+            category: .subscription,
+            severity: pushOK ? .success : .warning
+        ))
+        updateProgress()
+        
+        // Test 4: Kalp Aboneliği
+        results.append(HealthCheck(
+            title: "Kalp Bildirimi",
+            isOK: heartbeatSubscribed,
+            detail: heartbeatSubscribed ? "Kalp mesajları dinleniyor" : "Abonelik yok. 'Aboneliği Yenile' deneyin",
+            category: .subscription,
+            severity: heartbeatSubscribed ? .success : .warning
+        ))
+        updateProgress()
+        
+        // Test 5: Eşleşme Durumu
+        let hasPartner = partnerID != nil
+        results.append(HealthCheck(
+            title: "Eş Bağlantısı",
+            isOK: hasPartner,
+            detail: hasPartner ? "Eşinizle bağlısınız 💜" : "Henüz eşleşme yok",
+            category: .pairing,
+            severity: hasPartner ? .success : .info
+        ))
+        updateProgress()
+        
+        // Test 6: Son Gönderilen Kalp
+        let sentRecently = lastSentAt != nil && Date().timeIntervalSince(lastSentAt!) < 86400
+        results.append(HealthCheck(
+            title: "Son Gönderim",
+            isOK: lastSentAt != nil,
+            detail: lastSentAt != nil ? formatRelativeDate(lastSentAt!) : "Hiç kalp gönderilmedi",
+            category: .data,
+            severity: sentRecently ? .success : (lastSentAt != nil ? .info : .info)
+        ))
+        updateProgress()
+        
+        // Test 7: Son Alınan Kalp
+        let receivedRecently = lastReceivedAt != nil && Date().timeIntervalSince(lastReceivedAt!) < 86400
+        results.append(HealthCheck(
+            title: "Son Alınan",
+            isOK: lastReceivedAt != nil,
+            detail: lastReceivedAt != nil ? formatRelativeDate(lastReceivedAt!) : "Hiç kalp alınmadı",
+            category: .data,
+            severity: receivedRecently ? .success : (lastReceivedAt != nil ? .info : .info)
+        ))
+        updateProgress()
+        
+        // Test 8: Ağ Bağlantısı Testi (Async)
+        testNetworkConnection { isConnected, latency in
+            results.append(HealthCheck(
+                title: "Ağ Bağlantısı",
+                isOK: isConnected,
+                detail: isConnected ? "Bağlantı aktif (\(latency)ms)" : "Sunucuya ulaşılamıyor",
+                category: .connection,
+                severity: isConnected ? (latency < 500 ? .success : .warning) : .error
+            ))
+            updateProgress()
+            
+            // Test 9: CloudKit Veritabanı Erişimi
+            self.testDatabaseAccess { canAccess, recordCount in
+                results.append(HealthCheck(
+                    title: "Veritabanı Erişimi",
+                    isOK: canAccess,
+                    detail: canAccess ? "CloudKit erişilebilir" : "Veritabanına erişilemiyor",
+                    category: .connection,
+                    severity: canAccess ? .success : .error
+                ))
+                updateProgress()
+                
+                // Test 10: Genel Sağlık Skoru
+                let passedTests = results.filter { $0.isOK }.count
+                let healthScore = Int((Double(passedTests) / Double(results.count)) * 100)
+                let overallOK = healthScore >= 70
+                results.append(HealthCheck(
+                    title: "Genel Skor",
+                    isOK: overallOK,
+                    detail: "%\(healthScore) - \(passedTests)/\(results.count) test geçti",
+                    category: .data,
+                    severity: healthScore >= 90 ? .success : (healthScore >= 70 ? .warning : .error)
+                ))
+                updateProgress()
+                
+                DispatchQueue.main.async {
+                    self.healthChecks = results
+                    self.isRunningTest = false
+                    self.lastTestDate = Date()
+                }
+            }
+        }
+    }
+    
+    private func formatRelativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+    
+    private func testNetworkConnection(completion: @escaping (Bool, Int) -> Void) {
+        let startTime = Date()
+        
+        container.accountStatus { status, error in
+            let latency = Int(Date().timeIntervalSince(startTime) * 1000)
+            let isConnected = error == nil && status == .available
+            completion(isConnected, latency)
+        }
+    }
+    
+    private func testDatabaseAccess(completion: @escaping (Bool, Int) -> Void) {
+        let query = CKQuery(recordType: "Heartbeat", predicate: NSPredicate(value: true))
+        
+        database.fetch(withQuery: query, inZoneWith: nil, desiredKeys: nil, resultsLimit: 1) { result in
+            switch result {
+            case .success(let (results, _)):
+                completion(true, results.count)
+            case .failure:
+                completion(false, 0)
+            }
         }
     }
     

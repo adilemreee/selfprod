@@ -252,8 +252,15 @@ class VoiceManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     if let match = results.first,
                        let record = try? match.1.get() {
+                        let newRecordID = record.recordID
+                        
+                        // Yeni mesaj geldiğinde eski mesajı sil
+                        if let oldRecordID = self?.incomingMessageID, oldRecordID != newRecordID {
+                            self?.deleteMessage(recordID: oldRecordID)
+                        }
+                        
                         self?.hasIncomingMessage = true
-                        self?.incomingMessageID = record.recordID
+                        self?.incomingMessageID = newRecordID
                         self?.incomingMessageDuration = record["duration"] as? Double ?? 0
                     } else {
                         self?.hasIncomingMessage = false
@@ -341,12 +348,9 @@ extension VoiceManager: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async {
             self.isPlaying = false
-            
-            // Delete message after playing using stored recordID
-            if let recordID = self.currentPlaybackRecordID {
-                self.currentPlaybackRecordID = nil
-                self.deleteMessage(recordID: recordID)
-            }
+            // Mesaj dinlendikten sonra silinmiyor
+            // Yeni mesaj geldiğinde eski mesaj silinecek
+            self.currentPlaybackRecordID = nil
         }
     }
 }
